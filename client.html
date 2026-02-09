@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chainlink BTC Price Stream</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+        }
+        h1 {
+            color: #667eea;
+            margin-bottom: 8px;
+            font-size: 28px;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .controls {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        input, button {
+            padding: 10px 16px;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+            font-size: 14px;
+        }
+        input {
+            flex: 1;
+            min-width: 200px;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background: #5568d3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .status.disconnected {
+            background: #fee;
+            color: #c33;
+        }
+        .status.connecting {
+            background: #fef3cd;
+            color: #856404;
+        }
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        .price-display {
+            text-align: center;
+            padding: 32px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .price-label {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-bottom: 8px;
+        }
+        .price-value {
+            font-size: 48px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .price-time {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+        .history-info {
+            background: #f8f9fa;
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: #555;
+        }
+        .log-container {
+            background: #1e1e1e;
+            color: #ddd;
+            border-radius: 6px;
+            padding: 16px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 12px;
+        }
+        .log-entry {
+            padding: 4px 0;
+            border-bottom: 1px solid #333;
+        }
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+        .log-time {
+            color: #888;
+            margin-right: 8px;
+        }
+        .log-initial {
+            color: #4CAF50;
+        }
+        .log-update {
+            color: #2196F3;
+        }
+        .log-error {
+            color: #f44336;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>🔗 Chainlink BTC Price Stream</h1>
+            <p class="subtitle">WebSocket client for real-time Bitcoin price data</p>
+            
+            <div class="controls">
+                <input type="text" id="serverUrl" value="ws://127.0.0.1:8080" placeholder="Server URL">
+                <input type="number" id="historySeconds" value="1000" placeholder="History (seconds)" min="0" max="3600">
+                <button id="connectBtn" onclick="connect()">Connect</button>
+                <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+            </div>
+            
+            <div id="status" class="status disconnected">● Disconnected</div>
+            
+            <div class="price-display" id="priceDisplay" style="display: none;">
+                <div class="price-label">BTC/USD</div>
+                <div class="price-value" id="priceValue">—</div>
+                <div class="price-time" id="priceTime">—</div>
+            </div>
+            
+            <div class="history-info" id="historyInfo" style="display: none;"></div>
+        </div>
+        
+        <div class="card">
+            <h2 style="margin-bottom: 16px; font-size: 18px;">Activity Log</h2>
+            <div class="log-container" id="logContainer"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let startTime = null;
+
+        function log(message, type = 'info') {
+            const logContainer = document.getElementById('logContainer');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            
+            const time = new Date().toLocaleTimeString();
+            entry.innerHTML = `<span class="log-time">[${time}]</span>${message}`;
+            
+            logContainer.appendChild(entry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        function updateStatus(text, className) {
+            const status = document.getElementById('status');
+            status.textContent = `● ${text}`;
+            status.className = `status ${className}`;
+        }
+
+        function updatePrice(price, timestamp) {
+            document.getElementById('priceDisplay').style.display = 'block';
+            document.getElementById('priceValue').textContent = `$${price.toFixed(2)}`;
+            document.getElementById('priceTime').textContent = `ts: ${timestamp}`;
+        }
+
+        function connect() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const historySeconds = parseInt(document.getElementById('historySeconds').value) || 0;
+            
+            updateStatus('Connecting...', 'connecting');
+            log(`Connecting to ${serverUrl}...`);
+            
+            ws = new WebSocket(serverUrl);
+            startTime = Date.now();
+            
+            ws.onopen = () => {
+                updateStatus('Connected', 'connected');
+                log('✓ Connected to server', 'initial');
+                
+                // Send subscription
+                const subscription = {
+                    symbol: 'btc',
+                    history_seconds: historySeconds
+                };
+                ws.send(JSON.stringify(subscription));
+                log(`Subscribed to BTC with ${historySeconds}s history`, 'initial');
+                
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('disconnectBtn').disabled = false;
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'initial') {
+                    log(`Received ${data.history.length} historical data points`, 'initial');
+                    
+                    if (data.info) {
+                        const infoDiv = document.getElementById('historyInfo');
+                        infoDiv.textContent = `ℹ️ ${data.info}`;
+                        infoDiv.style.display = 'block';
+                    }
+                    
+                    // Log all historical points
+                    if (data.history.length > 0) {
+                        data.history.forEach((point, i) => {
+                            log(`${i + 1}. $${point.price.toFixed(2)} | ts: ${point.timestamp}`, 'initial');
+                        });
+                        
+                        const latest = data.history[data.history.length - 1];
+                        updatePrice(latest.price, latest.timestamp);
+                    }
+                    
+                } else if (data.type === 'update') {
+                    updatePrice(data.price, data.timestamp);
+                    log(`BTC/USD: $${data.price.toFixed(2)} | ts: ${data.timestamp}`, 'update');
+                    
+                } else if (data.type === 'error') {
+                    log(`ERROR: ${data.message}`, 'error');
+                }
+            };
+            
+            ws.onerror = (error) => {
+                log('Connection error', 'error');
+                updateStatus('Error', 'disconnected');
+            };
+            
+            ws.onclose = () => {
+                log('Disconnected from server', 'error');
+                updateStatus('Disconnected', 'disconnected');
+                document.getElementById('connectBtn').disabled = false;
+                document.getElementById('disconnectBtn').disabled = true;
+            };
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+
+        // Initial log message
+        log('Ready to connect. Enter server URL and click Connect.');
+    </script>
+</body>
+</html>
